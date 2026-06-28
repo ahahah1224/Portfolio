@@ -73,7 +73,6 @@ typedef struct {
 |------|-------------|
 | `parse_OBJ.h` | Main parser — single header |
 | `memory.h` | Custom allocator (`meta0`) with size metadata |
-| `Utelit.h` | File reading and number parsing utilities |
 
 ## Build
 
