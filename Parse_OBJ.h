@@ -1,5 +1,5 @@
 #pragma once
-#include <memory.h>
+#include "memory.h"
 #include <string.h>
 
 
@@ -132,7 +132,7 @@ static inline int copy_until(const char *src, char *dst, char term) {
 }
 
 
-#define MATCH(data, lit) (Comparison((void*)(data), (void*)(lit), sizeof(lit)-1))
+#define MATCH(data, lit) (meta_if((void*)(data), (void*)(lit), sizeof(lit)-1))
 
 
 static inline int skip_line(const char *s) {
@@ -142,17 +142,28 @@ static inline int skip_line(const char *s) {
 }
 
 
-static char *file_read_obj(const char *filename) {
-    FILE *f = fopen(filename, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *buf = (char*)malloc_meta0((size_t)len + 1);
-    fread(buf, 1, (size_t)len, f);
-    buf[len] = '\0';
-    fclose(f);
-    return buf;
+static char *file_read(const char *filename) {
+    FILE* file = fopen(filename, "rb+");
+    if (!file) return NULL;
+
+    fseek(file, 0, SEEK_END);
+    uint64_t length = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    if (length == 0) {
+		printf("file: %s;\n", filename);
+        meta_error("not curect length");
+        fclose(file);
+        return NULL;
+    }
+
+    char* buffer = meta_malloc((size_t)length + 1);
+    if (buffer != NULL) {
+		fread(buffer, 1, length, file);
+        buffer[length] = '\0';          
+    }
+    fclose(file);
+    return buffer;
 }
 
 
@@ -168,19 +179,19 @@ static int parse_mtl_map(const char *s, Mtl_map **out, int *consumed) {
         if (MATCH(s+i, "-blendu ")) {
             i += sizeof("-blendu ") - 1;
             if (MATCH(s+i, "off")) { m.blendu = false; i += 3; }
-            else if (MATCH(s+i, "on")) { i += 2; }
+            else if (MATCH(s+i, "on")) i += 2;
         } else if (MATCH(s+i, "-blendv ")) {
             i += sizeof("-blendv ") - 1;
             if (MATCH(s+i, "off")) { m.blendv = false; i += 3; }
-            else if (MATCH(s+i, "on")) { i += 2; }
+            else if (MATCH(s+i, "on")) i += 2; 
         } else if (MATCH(s+i, "-clamp ")) {
             i += sizeof("-clamp ") - 1;
             if (MATCH(s+i, "on")) { m.clamp = true; i += 2; }
-            else if (MATCH(s+i, "off")) { i += 3; }
+            else if (MATCH(s+i, "off")) i += 3;
         } else if (MATCH(s+i, "-cc ")) {
             i += sizeof("-cc ") - 1;
             if (MATCH(s+i, "on")) { m.cc = true; i += 2; }
-            else if (MATCH(s+i, "off")) { i += 3; }
+            else if (MATCH(s+i, "off")) i += 3;
         } else if (MATCH(s+i, "-bm ")) {
             i += sizeof("-bm ") - 1;
             i += skip_spaces(s+i);
@@ -215,13 +226,11 @@ static int parse_mtl_map(const char *s, Mtl_map **out, int *consumed) {
             int start = i;
             while (s[i] && s[i] != ' ' && s[i] != '\n') i++;
             int len = i - start;
-            m.type = (char*)malloc_meta0((size_t)len + 1);
+            m.type = meta_malloc((size_t)len+1);
             memcpy(m.type, s + start, (size_t)len);
             m.type[len] = '\0';
-        } else {
-          
+        } else
             while (s[i] && s[i] != ' ') i++;
-        }
         i += skip_spaces(s+i);
     }
 
@@ -230,29 +239,29 @@ static int parse_mtl_map(const char *s, Mtl_map **out, int *consumed) {
     while (s[i] && s[i] != '\n' && s[i] != '\r') i++;
     int len = i - start;
 
-    m.way = (char*)malloc_meta0((size_t)len + 1);
-    memcpy(m.way, s + start, (size_t)len);
+    m.way = meta_malloc((size_t)len+1);
+    memcpy(m.way, s+start, (size_t)len);
 
     while (len > 0 && m.way[len-1] == ' ') len--;
     m.way[len] = '\0';
 
-    *out = (Mtl_map*)calloc_meta0(1, sizeof(Mtl_map));
+    *out = meta_calloc(1, sizeof(Mtl_map));
     **out = m;
     *consumed = i;
     return 1;
 }
 
 
-static int Load_Mtl(const char *filename, Parse_OBJ *result) {
-    char *data = file_read_obj(filename);
+int Load_Mtl(const char *filename, Parse_OBJ *result) {
+    char *data = file_read(filename);
     if (!data) {
         printf("MTL not found: %s\n", filename);
         return 0;
     }
 
 
-    int cap = (int)sizeof_meta0(result->material)->count + 64;
-    Mtl *mats = (Mtl*)realloc_meta0(result->material, (size_t)cap * sizeof(Mtl));
+    int cap = (((uint64_t*)result->material)[-1]/sizeof(Mtl)) + 64;
+    Mtl *mats = meta_realloc(result->material, (size_t)cap * sizeof(Mtl));
     int cur = result->size_mtl;
 
     int i = 0;
@@ -267,14 +276,17 @@ static int Load_Mtl(const char *filename, Parse_OBJ *result) {
            
             if (cur >= cap) {
                 cap += 64;
-                mats = (Mtl*)realloc_meta0(mats, (size_t)cap * sizeof(Mtl));
+                mats = meta_realloc(mats, (size_t)cap * sizeof(Mtl));
             }
+			
             memset(&mats[cur], 0, sizeof(Mtl));
             int len = 0;
             while (data[i+len] && data[i+len] != '\n' && data[i+len] != '\r') len++;
-            mats[cur].name = (char*)malloc_meta0((size_t)len + 1);
-            memcpy(mats[cur].name, data+i, (size_t)len);
+            
+			mats[cur].name = meta_malloc((size_t)len + 1);
+            memcpy(mats[cur].name, data+i, len);
             mats[cur].name[len] = '\0';
+			
             i += len; cur++;
             continue;
         }
@@ -287,93 +299,107 @@ static int Load_Mtl(const char *filename, Parse_OBJ *result) {
             i += sizeof("Ns ") - 1;
             i += skip_spaces(data+i);
             i += parse_double(data+i, &m->Ns);
+			
         } else if (MATCH(data+i, "Ni ")) {
             i += sizeof("Ni ") - 1;
             i += skip_spaces(data+i);
             i += parse_double(data+i, &m->Ni);
+			
         } else if (MATCH(data+i, "Ka ")) {
             i += sizeof("Ka ") - 1;
             double v[4]; int n;
             i += parse_doubles(data+i, v, &n);
             if (n>0) m->Ka.x=v[0]; if (n>1) m->Ka.y=v[1]; if (n>2) m->Ka.z=v[2];
+			
         } else if (MATCH(data+i, "Kd ")) {
             i += sizeof("Kd ") - 1;
             double v[4]; int n;
             i += parse_doubles(data+i, v, &n);
             if (n>0) m->Kd.x=v[0]; if (n>1) m->Kd.y=v[1]; if (n>2) m->Kd.z=v[2];
+			
         } else if (MATCH(data+i, "Ks ")) {
             i += sizeof("Ks ") - 1;
             double v[4]; int n;
             i += parse_doubles(data+i, v, &n);
             if (n>0) m->Ks.x=v[0]; if (n>1) m->Ks.y=v[1]; if (n>2) m->Ks.z=v[2];
+			
         } else if (MATCH(data+i, "Ke ")) {
             i += sizeof("Ke ") - 1;
             double v[4]; int n;
             i += parse_doubles(data+i, v, &n);
             if (n>0) m->Ke.x=v[0]; if (n>1) m->Ke.y=v[1]; if (n>2) m->Ke.z=v[2];
+			
         } else if (MATCH(data+i, "d ")) {
             i += sizeof("d ") - 1;
             i += skip_spaces(data+i);
             i += parse_double(data+i, &m->opacity);
+			
         } else if (MATCH(data+i, "Tr ")) {
             i += sizeof("Tr ") - 1;
             i += skip_spaces(data+i);
             double tr; i += parse_double(data+i, &tr);
             m->opacity = 1.0 - tr;
+			
         } else if (MATCH(data+i, "illum ")) {
             i += sizeof("illum ") - 1;
             i += skip_spaces(data+i);
             int v; i += parse_int(data+i, &v);
             m->illum = (int8_t)v;
+			
         } else if (MATCH(data+i, "map_Kd ")) {
             i += sizeof("map_Kd ") - 1;
             int c; parse_mtl_map(data+i, &m->map_Kd, &c); i += c;
+			
         } else if (MATCH(data+i, "map_Ka ")) {
             i += sizeof("map_Ka ") - 1;
             int c; parse_mtl_map(data+i, &m->map_Ka, &c); i += c;
+			
         } else if (MATCH(data+i, "map_Ks ")) {
             i += sizeof("map_Ks ") - 1;
             int c; parse_mtl_map(data+i, &m->map_Ks, &c); i += c;
+			
         } else if (MATCH(data+i, "map_Ns ")) {
             i += sizeof("map_Ns ") - 1;
             int c; parse_mtl_map(data+i, &m->map_Ns, &c); i += c;
+			
         } else if (MATCH(data+i, "map_d ")) {
             i += sizeof("map_d ") - 1;
             int c; parse_mtl_map(data+i, &m->map_opacity, &c); i += c;
+			
         } else if (MATCH(data+i, "map_bump ") || MATCH(data+i, "bump ") ||
                    MATCH(data+i, "map_Bump ") || MATCH(data+i, "Bump ")) {
  
             while (data[i] && data[i] != ' ') i++;
             i += skip_spaces(data+i);
             int c; parse_mtl_map(data+i, &m->map_bump, &c); i += c;
-        } else {
+			
+        } else 
             i += skip_line(data+i);
-        }
 
         while (data[i] && data[i] != '\n') i++;
         if (data[i] == '\n') i++;
     }
 
-    mats = (Mtl*)realloc_meta0(mats, (size_t)cur * sizeof(Mtl));
+    mats = meta_realloc(mats, (size_t)cur * sizeof(Mtl));
     result->material  = mats;
     result->size_mtl  = cur;
-    free_meta0(data);
+    meta_free(data);
     return 1;
 }
 
 
-static int Read_Tringles_OBJ(const char *data, Parse_OBJ *obj) {
+int Read_Tringles_OBJ(const char *data, Parse_OBJ *obj) {
     int mtl_count = obj->size_mtl;
 
-    Vertex **tringles = (Vertex**)calloc_meta0((size_t)mtl_count, sizeof(Vertex*));
-    int    *tri_count = (int*)   calloc_meta0((size_t)mtl_count, sizeof(int));
-    int    *tri_cap   = (int*)   calloc_meta0((size_t)mtl_count, sizeof(int));
+    Vertex **tringles = meta_calloc((size_t)mtl_count, sizeof(Vertex*));
+    int    *tri_count = meta_calloc((size_t)mtl_count, sizeof(int));
+    int    *tri_cap   = meta_calloc((size_t)mtl_count, sizeof(int));
 
-    tringles[0] = (Vertex*)calloc_meta0(4096, sizeof(Vertex));
+    tringles[0] = meta_calloc(4096, sizeof(Vertex));
     tri_cap[0]  = 4096;
 
     int      vec_cap = 512;
-    Vertex  *verts   = (Vertex*)calloc_meta0((size_t)vec_cap, sizeof(Vertex));
+    Vertex  *verts   = meta_calloc((size_t)vec_cap, sizeof(Vertex));
 
     int usemtl = 0;
     int i = 0;
@@ -406,7 +432,7 @@ static int Read_Tringles_OBJ(const char *data, Parse_OBJ *obj) {
 
             
             if (tringles[usemtl] == NULL) {
-                tringles[usemtl] = (Vertex*)calloc_meta0(4096, sizeof(Vertex));
+                tringles[usemtl] = meta_calloc(4096, sizeof(Vertex));
                 tri_cap[usemtl]  = 4096;
             }
             continue;
@@ -422,7 +448,7 @@ static int Read_Tringles_OBJ(const char *data, Parse_OBJ *obj) {
 
                 if (nv >= vec_cap) {
                     vec_cap += 512;
-                    verts = (Vertex*)realloc_meta0(verts, (size_t)vec_cap * sizeof(Vertex));
+                    verts = meta_realloc(verts, (size_t)vec_cap * sizeof(Vertex));
                 }
 
                 Vertex v = {0, 0, 0};
@@ -452,14 +478,13 @@ static int Read_Tringles_OBJ(const char *data, Parse_OBJ *obj) {
 
             if (tri_count[usemtl] + new_tris * 3 > tri_cap[usemtl]) {
                 tri_cap[usemtl] = tri_count[usemtl] + new_tris * 3 + 4096;
-                tringles[usemtl] = (Vertex*)realloc_meta0(
-                    tringles[usemtl], (size_t)tri_cap[usemtl] * sizeof(Vertex));
+                tringles[usemtl] = meta_realloc(tringles[usemtl], (size_t)tri_cap[usemtl] * sizeof(Vertex));
             }
 
-            Vertex *dst = &tringles[usemtl][tri_count[usemtl]];
-            for (int t = 0; t < new_tris; t++) {
-                dst[t*3+0] = verts[0];
-                dst[t*3+1] = verts[t+1];
+			Vertex *dst = &tringles[usemtl][tri_count[usemtl]];
+			for (int t = 0; t < new_tris; t++) {
+				dst[t*3+0] = verts[0];
+				dst[t*3+1] = verts[t+1];
                 dst[t*3+2] = verts[t+2];
             }
             tri_count[usemtl] += new_tris * 3;
@@ -469,21 +494,20 @@ static int Read_Tringles_OBJ(const char *data, Parse_OBJ *obj) {
         while (data[i] && data[i] != '\n') i++;
     }
 
-    free_meta0(verts);
+    meta_free(verts);
 
     for (int m = 0; m < mtl_count; m++) {
         if (tringles[m] == NULL) continue;
         if (tri_count[m] == 0) {
-            free_meta0(tringles[m]);
+            meta_free(tringles[m]);
             tringles[m] = NULL;
         } else {
-            tringles[m] = (Vertex*)realloc_meta0(
-                tringles[m], (size_t)tri_count[m] * sizeof(Vertex));
+            tringles[m] = meta_realloc(tringles[m], (size_t)tri_count[m] * sizeof(Vertex));
         }
     }
 
-    free_meta0(tri_count);
-    free_meta0(tri_cap);
+    meta_free(tri_count);
+    meta_free(tri_cap);
     obj->tringles = tringles;
     return 1;
 }
@@ -493,10 +517,10 @@ int Read_OBJ(const char *data, Parse_OBJ *result) {
     memset(&obj, 0, sizeof(Parse_OBJ));
 
     int v_cap  = 1024, n_cap = 1024, uv_cap = 1024;
-    obj.vectors = (Vec4*)  calloc_meta0((size_t)v_cap,  sizeof(Vec4));
-    obj.normals = (Normal*)calloc_meta0((size_t)n_cap,  sizeof(Normal));
-    obj.uvs     = (Uv3*)   calloc_meta0((size_t)uv_cap, sizeof(Uv3));
-    obj.coments = (char*)  calloc_meta0(256,             sizeof(char));
+    obj.vectors = meta_calloc((size_t)v_cap,  sizeof(Vec4));
+    obj.normals = meta_calloc((size_t)n_cap,  sizeof(Normal));
+    obj.uvs     = meta_calloc((size_t)uv_cap, sizeof(Uv3));
+    obj.coments = meta_calloc(256,            sizeof(char));
     int com_cap = 256;
 
     int i = 0;
@@ -513,7 +537,7 @@ int Read_OBJ(const char *data, Parse_OBJ *result) {
           
             if (obj.size_com + len + 2 >= com_cap) {
                 com_cap = obj.size_com + len + 256;
-                obj.coments = (char*)realloc_meta0(obj.coments, (size_t)com_cap);
+                obj.coments = meta_realloc(obj.coments, (size_t)com_cap);
             }
             memcpy(obj.coments + obj.size_com, data + start, (size_t)len);
             obj.size_com += len;
@@ -528,7 +552,7 @@ int Read_OBJ(const char *data, Parse_OBJ *result) {
             while (data[i] && data[i] != '\n' && data[i] != '\r') i++;
             int len = i - start;
             while (len > 0 && data[start+len-1] == ' ') len--;
-            obj.mtllib = (char*)malloc_meta0((size_t)len + 1);
+            obj.mtllib = meta_malloc((size_t)len + 1);
             memcpy(obj.mtllib, data+start, (size_t)len);
             obj.mtllib[len] = '\0';
             continue;
@@ -541,7 +565,7 @@ int Read_OBJ(const char *data, Parse_OBJ *result) {
             while (data[i] && data[i] != '\n' && data[i] != '\r') i++;
             int len = i - start;
             while (len > 0 && data[start+len-1] == ' ') len--;
-            obj.obj_name = (char*)malloc_meta0((size_t)len + 1);
+            obj.obj_name = meta_malloc((size_t)len + 1);
             memcpy(obj.obj_name, data+start, (size_t)len);
             obj.obj_name[len] = '\0';
             continue;
@@ -561,7 +585,7 @@ int Read_OBJ(const char *data, Parse_OBJ *result) {
             i += 2;
             if (obj.size_v >= v_cap) {
                 v_cap += 1024;
-                obj.vectors = (Vec4*)realloc_meta0(obj.vectors, (size_t)v_cap * sizeof(Vec4));
+                obj.vectors = meta_realloc(obj.vectors, (size_t)v_cap * sizeof(Vec4));
             }
             Vec4 *v4 = &obj.vectors[obj.size_v];
             v4->x = v4->y = v4->z = 0.0; v4->w = 1.0;
@@ -578,7 +602,7 @@ int Read_OBJ(const char *data, Parse_OBJ *result) {
             i += 3;
             if (obj.size_n >= n_cap) {
                 n_cap += 1024;
-                obj.normals = (Normal*)realloc_meta0(obj.normals, (size_t)n_cap * sizeof(Normal));
+                obj.normals = meta_realloc(obj.normals, (size_t)n_cap * sizeof(Normal));
             }
             Normal *nm = &obj.normals[obj.size_n];
             double nums[4]; int n;
@@ -593,7 +617,7 @@ int Read_OBJ(const char *data, Parse_OBJ *result) {
             i += 3;
             if (obj.size_uv >= uv_cap) {
                 uv_cap += 1024;
-                obj.uvs = (Uv3*)realloc_meta0(obj.uvs, (size_t)uv_cap * sizeof(Uv3));
+                obj.uvs = meta_realloc(obj.uvs, (size_t)uv_cap * sizeof(Uv3));
             }
             Uv3 *uv = &obj.uvs[obj.size_uv];
             double nums[4]; int n;
@@ -606,13 +630,13 @@ int Read_OBJ(const char *data, Parse_OBJ *result) {
         while (data[i] && data[i] != '\n') i++;
     }
 
-    obj.vectors = (Vec4*)  realloc_meta0(obj.vectors, (size_t)obj.size_v  * sizeof(Vec4));
-    obj.normals = (Normal*)realloc_meta0(obj.normals, (size_t)obj.size_n  * sizeof(Normal));
-    obj.uvs     = (Uv3*)   realloc_meta0(obj.uvs,     (size_t)obj.size_uv * sizeof(Uv3));
+    obj.vectors = meta_realloc(obj.vectors, (size_t)obj.size_v  * sizeof(Vec4));
+    obj.normals = meta_realloc(obj.normals, (size_t)obj.size_n  * sizeof(Normal));
+    obj.uvs     = meta_realloc(obj.uvs,     (size_t)obj.size_uv * sizeof(Uv3));
 
-    obj.material = (Mtl*)calloc_meta0(1, sizeof(Mtl));
-    obj.material[0].name = (char*)malloc_meta0(8);
-    memcpy(obj.material[0].name, "Default", 8);
+    obj.material = meta_calloc(1, sizeof(Mtl));
+    obj.material[0].name = meta_malloc(8);
+    Writing(obj.material[0].name, "Default", 8);
     obj.size_mtl = 1;
 
     if (obj.mtllib)
@@ -624,16 +648,16 @@ int Read_OBJ(const char *data, Parse_OBJ *result) {
     return 1;
 }
 
-static void free_Mtl_map(Mtl_map *m) {
+void free_Mtl_map(Mtl_map *m) {
     if (!m) return;
-    free_meta0(m->way);
-    if (m->type) free_meta0(m->type);
-    free_meta0(m);
+    meta_free(m->way);
+    if (m->type) meta_free(m->type);
+    meta_free(m);
 }
 
-static void free_Mtl_OBJ(Mtl *mats, int count) {
+void free_Mtl_OBJ(Mtl *mats, int count) {
     for (int i = 0; i < count; i++) {
-        free_meta0(mats[i].name);
+        meta_free(mats[i].name);
         free_Mtl_map(mats[i].map_Ns);
         free_Mtl_map(mats[i].map_Ka);
         free_Mtl_map(mats[i].map_Kd);
@@ -645,22 +669,22 @@ static void free_Mtl_OBJ(Mtl *mats, int count) {
 
 int free_Parse_OBJ(Parse_OBJ *obj) {
     if (!obj) return 0;
-    free_meta0(obj->vectors);
-    free_meta0(obj->normals);
-    free_meta0(obj->uvs);
-    free_meta0(obj->coments);
-    free_meta0(obj->mtllib);
-    free_meta0(obj->obj_name);
+    meta_free(obj->vectors);
+    meta_free(obj->normals);
+    meta_free(obj->uvs);
+    meta_free(obj->coments);
+    meta_free(obj->mtllib);
+    meta_free(obj->obj_name);
 
     if (obj->tringles) {
         for (int i = 0; i < obj->size_mtl; i++)
-            if (obj->tringles[i]) free_meta0(obj->tringles[i]);
-        free_meta0(obj->tringles);
+            if (obj->tringles[i]) meta_free(obj->tringles[i]);
+        meta_free(obj->tringles);
     }
 
     if (obj->material) {
         free_Mtl_OBJ(obj->material, obj->size_mtl);
-        free_meta0(obj->material);
+        meta_free(obj->material);
     }
     return 1;
 }
